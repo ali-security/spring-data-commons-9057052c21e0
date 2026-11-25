@@ -33,6 +33,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.annotation.Autowire;
 import org.springframework.core.ResolvableType;
 import org.springframework.data.geo.GeoResults;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.util.ReflectionUtils;
 
 /**
@@ -358,6 +359,46 @@ public class TypeDiscovererUnitTests {
 		assertThat(TypeInformation.of(containerList)).isNotEqualTo(TypeInformation.of(containerMap));
 	}
 
+	@Test // GH-3500
+	void superclassFieldsDoNotHideSubclassFields() {
+
+		TypeDiscoverer<?> discoverer = TypeDiscoverer.td(ResolvableType.forClass(TheOne.class));
+
+		assertThat(discoverer.getProperty("theOne").getType()).isEqualTo(String.class);
+	}
+
+	@Test // GH-3492
+	@SuppressWarnings("unchecked")
+	void doesNotRetainLookupsOfUnknownProperties() {
+
+		var discoverer = new TypeDiscoverer<>(ResolvableType.forClass(Person.class));
+
+		assertThat(discoverer.getProperty("addresses")).isNotNull();
+
+		var fields = (Lazy<Map<String, TypeInformation<?>>>) ReflectionTestUtils.getField(discoverer, "fields");
+		var knownProperties = fields.get().size();
+
+		for (var i = 0; i < 10_000; i++) {
+			assertThat(discoverer.getProperty("unknown" + i)).isNull();
+		}
+
+		assertThat(fields.get()).hasSize(knownProperties) //
+				.containsKey("addresses") //
+				.doesNotContainKeys("unknown0", "unknown9999");
+		assertThat(fields.get().keySet()).noneMatch(it -> it.startsWith("unknown"));
+	}
+
+	@Test // GH-3492
+	void resolvesFieldsAndAccessorOnlyPropertiesFromPrecomputedProperties() {
+
+		var discoverer = new TypeDiscoverer<>(ResolvableType.forClass(AccessorOnlyProperty.class));
+
+		assertThat(discoverer.getProperty("field").getType()).isEqualTo(Integer.class);
+		assertThat(discoverer.getProperty("computed").getType()).isEqualTo(Long.class);
+		assertThat(discoverer.getProperty("field.unknown")).isNull();
+		assertThat(discoverer.getProperty("unknown")).isNull();
+	}
+
 	class Person {
 
 		Addresses addresses;
@@ -460,6 +501,24 @@ public class TypeDiscovererUnitTests {
 
 	static class MyContainer<T> {
 		T data;
+	}
+
+	static class SuperclassWithProperties {
+		private CharSequence theOne;
+		private String theOther;
+	}
+
+	class TheOne extends SuperclassWithProperties {
+		private String theOne;
+	}
+
+	static class AccessorOnlyProperty {
+
+		private Integer field;
+
+		public Long getComputed() {
+			return 0L;
+		}
 	}
 
 }
